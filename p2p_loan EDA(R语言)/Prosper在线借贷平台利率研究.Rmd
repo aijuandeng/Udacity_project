@@ -1,0 +1,650 @@
+---
+title: "R璇█瀵硅捶娆惧叕鍙告暟鎹殑鍒嗘瀽鎶ュ憡"
+author: "aj"
+date: "2018骞<b4>11鏈<88>5鏃<a5>"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# 导入模块
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(gridExtra)
+library("memisc")
+```
+
+## 加载数据集
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Load_the_Data}
+setwd("F:/文档/进阶/项目二文件/项目二prosper")
+loandata = read.csv("prosperLoanData.csv")
+#str(loandata)
+#head(loandata)
+```
+一
+
+数据集共有81个变量,113937个对象
+
+# 案例分析
+## 案例简介 
+
+Prosper是美国的一家P2P在线借贷平台，网站撮合了一些有闲钱的人和一些急用钱的人。用户若有贷款需求，可在网站上列出期望数额和可承受的最大利率。潜在贷方则为数额和利率展开竞价。
+本项目拟通过该数据集的探索，结合自己的理解进行分析，最终目的的是初步预测哪些人贷款后会还款、哪些人会赖账，通过建模探索影响prosper平台设定贷款利率的最大因素。
+
+1. **ListingCreation**: 列表创建时间。
+
+2. **Term**: 贷款期限，期限越长的，利率应当越高
+
+3. **LoanStatus**: 贷款状态（Completed、Current、Defaulted、Chargedoff等）
+
+4. **BorrowerBorrowerRate**: 借款利率。
+
+5. **DelinquenciesLast7Years**: 信用资料提交时借款人过去7年违约次数。
+
+6. **StatedMonthlyIncome**: 客户自己声称的月收入。
+
+7. **IsBorrowerHomeowner**: 借款人是否拥有住房。
+
+8. **InquiriesLast6Months**: 最近6个月的征信记录查询次数。一般来说，征信查询次数越多，该主体的贷款申请就越多。
+
+9. **DebtToIncomeRatio**: 借款人的债务收入比，债务收入比越高说明筹资者财务状况越差，还款能力越低。
+
+10. **Occupation**: 贷款人职业
+
+11. **CreditGrade/ProsperRating(Alpha)**: 信用等级，前者反映的是2009年7月1日前客户的信用等级，后者反映的是2009年7月1日后的信用等级。信用等级越高，其偿债能力越强。
+
+12. **CreditScore**: 由消费信用公司提供的消费信用评分，同信用评级作用。
+
+13. **BankCardUse**: 信用资料提交时借款人信用卡使用额度和信用卡总透支额度的百分比，本文将这个数据分成四组（mild use; medium use; heavy use; super use）
+
+
+## 数据预处理
+
+### 整合数据
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, LoanStatus}
+
+table(loandata$LoanStatus)
+```
+
+### 贷款状态
+步骤：
+针对LoanStatus进行重构
+
+1.将所有含有"Past Due"字段的值统一为"PastDue"  
+
+2.将"Cancelled"归类到"Current"中 
+
+3.将"defaulted"归类到"Chargedoff"中  
+
+4.将"FinalPaymentInProgress"归类到"Completed"中  
+```{r echo=FALSE, message=FALSE, warning=FALSE, integrated_data}
+PastDue <- c("Past Due (>120 days)",
+             "Past Due (1-15 days)",             
+             "Past Due (16-30 days)", 
+             "Past Due (31-60 days)",
+             "Past Due (61-90 days)",
+             "Past Due (91-120 days)")
+loandata$LoanStatus <- as.character(loandata$LoanStatus)  # 转换成字符型数据 
+loandata$LoanStatus[loandata$LoanStatus %in% PastDue] <- "PastDue"  
+# loandata$LoanStatus中是否存在PastDue中的元素，是则赋值为"PastDue"
+loandata$LoanStatus[loandata$LoanStatus == "Cancelled"] <- "Current"
+loandata$LoanStatus[loandata$LoanStatus == "Defaulted"] <- "Chargedoff"
+loandata$LoanStatus[loandata$LoanStatus == "FinalPaymentInProgress"] <- "Completed"
+table(loandata$LoanStatus)
+
+# 再次整合数据
+# 1.然后将"PastDue"与"Chargedoff"合并，表示未按时还款
+# 2.将"Current"和"Completed"合并，表示按时还款未出现不良记录的
+loandata$LoanStatus[loandata$LoanStatus == "PastDue"] <- "Chargedoff"
+loandata$LoanStatus[loandata$LoanStatus == "Current"] <- "Completed"
+table(loandata$LoanStatus)
+```
+
+### 消费信用评分评级
+
+对借款人的消费信用评级，数据中有高低范围，将这两个数值取平均值做计算
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, credit}
+loandata$CreditScore <- (loandata$CreditScoreRangeLower + loandata$CreditScoreRangeUpper) / 2
+
+```
+
+因2009年7月1日，Prosper的信用评级模型发生了改变，所以需要进行分段处理  
+
+1.先处理2009年7月1日前的数据 
+
+2.再处理2009年7月1日后的数据  
+```{r echo=FALSE, message=FALSE, warning=FALSE, CreditGrade}
+loandata$CreditGrade <- ordered(loandata$CreditGrade,
+                                levels = c("NC", "HR", "E", "D", "C", "B", "A", "AA"))
+loandata$ProsperRating..Alpha. <- ordered(loandata$ProsperRating..Alpha.,
+                                          levels = c("HR", "E", "D", "C", "B", "A", "AA"))
+# 因为2009年7月1日是一个数据节点，因此将数据分成两段处理
+loandata$LoanOriginationDate <- as.Date(loandata$LoanOriginationDate) # 转换成日期格式
+loandata$Phase[loandata$LoanOriginationDate > "2009-07-01"] <- "After 2009"
+loandata$Phase[loandata$LoanOriginationDate < "2009-07-01"] <- "Before 2009"
+table(loandata$Phase)
+```
+
+### 信用卡使用程度
+
+将BankcardUtilization数据分成四组（mild use; medium use; heavy use; super use）
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, BankcardUtilization}
+loandata$BankCardUse[loandata$BankcardUtilization < 
+                       quantile(loandata$BankcardUtilization,
+                                probs = 0.25, "na.rm" = TRUE)] <- "Mild Use"
+                                             
+loandata$BankCardUse[
+     loandata$BankcardUtilization >= quantile(loandata$BankcardUtilization,
+                                              probs = 0.25, "na.rm" = TRUE) &
+         loandata$BankcardUtilization < quantile(loandata$BankcardUtilization,
+                                                  probs = 0.5, "na.rm"= TRUE)] <- "Medium Use"
+
+loandata$BankCardUse[
+     loandata$BankcardUtilization >= quantile(loandata$BankcardUtilization,
+                                              probs = 0.5, "na.rm" = TRUE)&
+        loandata$BankcardUtilization < quantile(loandata$BankcardUtilization,
+                                                probs = 0.75, "na.rm" = TRUE)] <- "Heavy Use"
+ 
+
+loandata$BankCardUse[loandata$BankcardUtilization >= 0.75] <- "Super Use"
+
+loandata$BankCardUse <- factor(loandata$BankCardUse,
+                               levels = c("Mild Use", 
+                                          "Medium Use", 
+                                          "Heavy Use", 
+                                          "Super Use"))
+
+table(loandata$BankCardUse)                                             
+```
+
+## 探索数据集
+
+### 单变量探索
+
+#### 贷款期限
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Term}
+ggplot(aes(x = as.factor(Term)), data = loandata) +
+    geom_histogram(stat = "count",width=0.5) +
+    xlab("Term")
+table(loandata$Term, dnn = ("Term"))
+```
+描述:一年期（12个月）的有1614笔，三年期（36个月）的有87778笔，五年期（60个月）的有24545笔。由此，平台上的贷款以中长期为主，且三年期占绝大多数。
+经查阅资料发现，Prosper平台是2009年以后才开始提供一年期和五年期贷款品种。
+
+#### 贷款利率
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, BorrowerRate}
+ggplot(aes(x = BorrowerRate), data = loandata) +
+    geom_histogram(binwidth = 0.01) +
+    scale_x_continuous(breaks = seq(0, 0.4, 0.1)) +
+    facet_wrap(~ Term, ncol = 3)
+```
+
+
+描述:平台上的借款利率多集中在0.1至0.2这个区间，另外，利率0.32附近也拥有大量的观测值。并且贷款利率似乎与贷款期限关系并不明显，未如经验判断的“期限越长、利率越高”。
+
+#### 过去7年的违约次数
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, DelinquenciesLast7Years}
+ggplot(aes(x = DelinquenciesLast7Years), data = loandata) +
+    geom_density(aes(fill = I("grey"))) +
+    coord_cartesian(xlim = c(0, quantile(loandata$DelinquenciesLast7Years,
+                                               probs = 0.95, "na.rm" = TRUE)))
+```
+
+
+描述:大部分借款人在过去7年内的违约次数均为0，这说明整个平台借款人的信用状况较好
+
+#### 月收入
+月收入很大情况下能够反映借贷人的还款能力
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, StatedMonthlyIncome}
+summary(loandata$StatedMonthlyIncome)
+ggplot(aes(x = StatedMonthlyIncome), 
+       data = subset(loandata, loandata$StatedMonthlyIncome <
+                         quantile(loandata$StatedMonthlyIncome, 
+                                  probs = 0.95, "na.rm" = TRUE))) +
+    geom_histogram(binwidth = 500) +
+    scale_x_continuous(breaks = seq(0, 12000, 1200),limits = c(0,12000)) +
+    geom_vline(xintercept = 2500, color = "red") +
+    geom_vline(xintercept = 6000, color = "red")
+```
+
+
+描述:大部分借贷人的月薪在2500~6000美金之间
+
+#### 是否拥有房屋
+有房产的借款人是否要比没有房产的人偿还能力强
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, IsBorrowerHomeowner}
+ggplot(aes(x = IsBorrowerHomeowner), data = loandata) +
+  geom_bar(width=0.3,fill=I('grey'))
+```
+
+
+描述:有房屋的借贷人略微多于没房屋的借贷人，但是差异很小
+
+#### 借款人征信查询的次数
+征信查询的次数越多表示借款人近期的申请的贷款越多,资金越紧张
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, InquiriesLast6Months}
+ggplot(aes(x = InquiriesLast6Months, fill = I("grey")), data = loandata) +
+    geom_density(binwidth = 1) +
+    geom_vline(xintercept = quantile(loandata$InquiriesLast6Months, 
+                                     probs = 0.95, "na.rm" = TRUE), 
+               linetype = "dashed", color = "red") +
+    coord_cartesian(xlim = c(0, quantile(loandata$InquiriesLast6Months,
+                                         probs = 0.95, "na.rm" = TRUE)))
+```
+
+
+描述:95%的借款人征信查询次数在5次及以下,6个月内无征信的借款人占多数。
+
+#### 负债收益比
+负债收益比反映了借款人的杠杆率,如果大于1表示很难偿还贷款,极易引发坏账
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, DebtToIncomeRatio}
+ggplot(aes(x = DebtToIncomeRatio), data = loandata) +
+    geom_histogram(binwidth = 0.05) +
+    scale_x_continuous(breaks = seq(0, 1, 0.1),limits = c(0,1)) +
+    geom_vline(xintercept = quantile(loandata$DebtToIncomeRatio, 
+                                     probs = 0.95, "na.rm" = TRUE),
+               linetype = "dashed", color = "red")
+```
+
+
+描述:95%的借款人负债收入比小于0.5，另外注意到，极少数人的负债收入比达到甚至超过10,总体来说平台的负债收益比较低,资质较好
+
+### 借款人职业
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Occupation}
+data_count <- loandata %>%
+  group_by(Occupation) %>%
+  summarise(n = n())
+
+ggplot(aes(x = reorder(Occupation, -n), y = n),
+       data = data_count) +
+    geom_bar(stat = "identity") +
+    theme(axis.text.x = element_text(angle = 90,
+                                     vjust = 0.5,
+                                     hjust = 1))
+```
+
+
+描述:职业中，选择“other”的人数最多，说明很多人在申请贷款时出于隐私或者其他原因不选择职业，该数据的真实性存疑
+
+### 贷款状态
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, pie}
+table(loandata$LoanStatus)
+x <- table(loandata$LoanStatus) 
+piepercent<- paste(round(100*x/sum(x), 2), "%")
+pie(x,labels=piepercent,main="the Status of the loan",col=rainbow(length(x)))
+legend("topright",c("Chargedoff","Completed"),fill = rainbow(length(x)), cex = 0.8)
+```
+
+
+描述:Prosper平台整体贷款的违约率约为16.74%
+
+#### 客户信用评价
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, CreditScore}
+p1 <- ggplot(aes(x = CreditScore), data = loandata) +
+    geom_histogram()+
+    coord_cartesian(xlim = c(400, 900)) +
+    scale_x_continuous(breaks = seq(400, 900, 50)) +
+    ggtitle("The Histogram of Borrowers‘ CreditScore")
+
+p2 <- ggplot(aes(x = CreditGrade),
+             data = subset(loandata, LoanOriginationDate < "2009-07-01")) +
+    geom_bar() +
+    scale_x_discrete(limits = c("HR","E","D","C","B","A","AA")) +
+    ggtitle("CreditGrade Before 2009")
+    
+p3 <- ggplot(aes(x = ProsperRating..Alpha.),
+             data = subset(loandata, LoanOriginationDate > "2009-07-01")) +
+    geom_bar() +
+    scale_x_discrete(limits = c("HR","E","D","C","B","A","AA")) +
+    ggtitle("CreditGrade After 2009")
+
+grid.arrange(p1, p2, p3, ncol = 1)
+
+```
+
+
+描述:大部分借款人的消费信用评分都高于600分，集中于700分左右，而2009年前后的信用评级也显示出较为优秀的信用资质B级。
+
+#### 信用卡使用情况
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, BankCardUse}
+ggplot(aes(BankCardUse),
+       data = subset(loandata, !is.na(BankcardUtilization))) +
+  geom_bar(width=0.5,color="black",fill="black")
+```
+
+
+描述:有多数人的信用卡处于Super Use状态，借款人的还款能力会因此而大打折扣
+
+## 单变量分析结论
+
+**数据集中共含有113937笔贷款记录，每笔记录均有12个特征描述，分别是：贷款日期（ListingCreationDate）、贷款期限（Term）、贷款状态（LoanStatus）、贷款利率（BorrowerRate）、借款人过去7年违约次数（DelinquenciesLast7Years）、借款人月收入（StatedMonthlyIncome）、借款人是否拥有房屋（IsBorrowerHomeowner）、借款人最近6个月的征信查询次数（InquiriesLast6Months）、借款人负债收入比（DebtToIncomeRatio）、借款人职业（Occupation）、借款人信用评价（CreditScore / CreditGrade / ProsperRating(Alpha)）及借款人的信用卡使用情况（BankCardUse）。**
+
+**这12个特征中，有4个特征用于描述贷款的特点，包括贷款日期、贷款期限、贷款状态和贷款利率。**
+
+**有8个特征用于描述借款人主体的特点，包括过去7年违约次数、月收入、是否拥有房屋、最近6个月的征信查询次数、负债收入比、职业、信用评价及信用卡使用情况。**
+
+**通过上一部分的初步探索，发现以下特点：**
+
+**1. 大部分贷款的期限为三年期。**
+
+**2. 整个平台贷款的违约率为16.74%。**
+
+**3. 大部分贷款利率集中在0.08至0.2这个区间，0.32附近也有较大的成交量。**
+
+**4. 平台上的借款人整体信用资质较好。**
+
+**5. 从信用卡使用角度来看，借款人的还款压力较大。**
+
+**6. 大部分借款人的月收入集中在2500至6000美元之间。**
+
+**7. 拥有房屋的借款人与未拥有房屋的借款人数量大致相当。**
+
+**8. 出于隐私或者其他原因，借款人申请贷款时职业一项选择“other”的极多。**
+
+
+## 双变量探索
+
+### 贷款利率随着时间变化的趋势
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots1}
+#table(loandata$ListingCreationDate)
+#install.packages('lubridate')
+library(lubridate)
+#year(loandata$ListingCreationDate)
+
+ggplot(aes(x = year(ListingCreationDate), y = BorrowerRate), data = loandata) +
+  geom_point(alpha = 0.01) +
+  scale_x_continuous(limits = c(2005,2014),breaks=seq(2005,2014,2))+
+  facet_wrap(~Term)
+```
+
+
+描述:一年期与五年期贷款是在2011年前后才上线的产品。三年期是整个平台最主要的贷款,
+2008年以前，贷款利率主要分布在0.08至0.2这个区间，随着美国次贷危机的持续发酵2010年利率逐渐分化，优质借款人依旧可以拿到0.1甚至更低的利率，而更多的借款人则需要以0.2以上甚至0.35的利率方可筹到资金。为了救市美联储实行了量化宽松政策，持续向市场中注入大量流动性，利率承压下行。至2014年，可以看到各个利率层面均有大量的成交记录信贷市场逐渐恢复元气。
+
+### 贷款利率与贷款状态
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots2}
+ggplot(aes(x = LoanStatus, y = BorrowerRate), data = loandata) +
+    geom_boxplot()
+```
+
+
+描述:违约贷款组的利率明显高于正常还款组。一方面，贷款定价高是由于借款人自身资质差；另一方面，高利率又使得借款人更加难以承受进而违约
+
+### 贷款利率与过去7年违约次数
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots3}
+ggplot(aes(x = DelinquenciesLast7Years, y = BorrowerRate), 
+      data = subset(loandata, 
+                    loandata$DelinquenciesLast7Years <
+                        quantile(loandata$DelinquenciesLast7Years,
+                                 probs = 0.95, "na.rm" = TRUE))) +
+    geom_point(alpha = 0.05, position = "jitter") +
+    geom_smooth()
+```
+
+
+描述:95%的借款人过去7年违约次数低于23次，违约次数低于3次时，违约次数与贷款利率呈现出弱正相关性；而3次以后两者关系就趋于平稳。
+
+### 贷款利率和借款人月收入的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots4}
+ggplot(aes(x = StatedMonthlyIncome, y = BorrowerRate), 
+       data = subset(loandata, !is.na(loandata$StatedMonthlyIncome))) +
+    stat_density2d(aes(alpha = ..density..), geom = "tile", contour = FALSE) +
+    scale_x_continuous(limits = c(0, 30000))
+```
+
+
+描述:平台的借贷人月收入在10000美金以下,未发现贷款利率和月收入存在关系
+
+### 贷款利率与借款人是否拥有房屋之间的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots5}
+ggplot(aes(x = BorrowerRate), data = loandata) +
+    geom_histogram() +
+    geom_hline(yintercept = 3000, linetype = "dashed", color = "red") +
+    facet_wrap(~IsBorrowerHomeowner, ncol = 1)
+```
+
+
+描述:拥有房屋的人比没有房屋的人贷款的利息更低
+
+### 贷款利率与过去6个月征信查询次数的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots6}
+summary(loandata$InquiriesLast6Months)
+ggplot(aes(x = as.factor(InquiriesLast6Months), y = BorrowerRate), 
+       data = subset(loandata, loandata$InquiriesLast6Months <
+                         quantile(loandata$InquiriesLast6Months, 
+                                  probs = 0.95, "na.rm" = TRUE))) +
+    geom_boxplot() +
+    xlab("InquiriesLast6Months")
+```
+
+
+描述:征信查询的次数越多,贷款的利率越高
+
+### 贷款利率和负债收益比的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots7}
+ggplot(aes(x = DebtToIncomeRatio, y = BorrowerRate), 
+       data = subset(loandata, loandata$DebtToIncomeRatio <
+                         quantile(loandata$DebtToIncomeRatio, 
+                                  probs = 0.95, "na.rm" = TRUE))) +
+    geom_point(alpha = 0.05, position = "jitter") +
+    stat_smooth(color = "red")
+```
+
+
+描述:借款人的收入负债比越高，贷款利率也越高
+
+### 贷款利率和信用评分的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots8}
+ggplot(aes(x = CreditScore, y = BorrowerRate), data = loandata) +
+    geom_point(alpha = 0.05) +
+    facet_wrap(~Phase, ncol = 1) +
+    coord_cartesian(xlim = c(400, 900), ylim = c(0, 0.4)) +
+    geom_line(stat = "summary", fun.y = mean) +
+    geom_line(stat = "summary", fun.y = median, linetype = 2, color = "red") +
+    geom_vline(xintercept = 600, color = "red")
+```
+
+
+描述:在2009年之前,Prosper还会为消费信用评级低于600分的借款人提供服务,在2009年重新上线之后,不再为评分低于600分的客户服务，同时超过600分的情况下信用评分越高贷款利率越低。
+
+### 贷款利率和信用等级的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots9}
+# 2009年7月1日以前
+p1 <- ggplot(aes(x = CreditGrade, y = BorrowerRate), 
+       data = subset(loandata, LoanOriginationDate < "2009-07-01")) +
+    scale_x_discrete(limits = c("HR", "E", "D", "C", "B", "A", "AA")) +
+    geom_boxplot() +
+    stat_summary(fun.y = mean, geom = "point", shape = 4) +
+    stat_summary(fun.y = mean, geom = "smooth", aes(group = 1))+
+  ggtitle("before 2009-07-01")
+
+
+# 2009年7月1日以后
+p2 <- ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate),
+       data = subset(loandata, LoanOriginationDate > "2009-07-01")) +
+    geom_boxplot() +
+    scale_x_discrete(limits = c("HR", "E", "D", "C", "B", "A", "AA")) +
+    stat_summary(fun.y = mean, geom = "point", shape = 4) +
+    stat_summary(fun.y = mean, geom = "smooth", aes(group = 1))+
+  ggtitle("after 2009-07-01")
+
+grid.arrange(p1,p2,ncol=1)
+```
+
+
+描述:通过比较2009年7月1日前后贷款利率与借款人信用评级之间的关系发现，2009年7月1日后图形的均值连线明显斜率更大，说明Prosper在涉诉恢复运营后更为重视借款人的信用评级，评级对贷款利率的影响权重更大了。
+
+## 双变量结论
+
+**通过探索贷款利率与其他变量之间的关系，大致得出以下结论：**
+
+**1. 贷款利率与过去7年的违约次数、过去6个月征信查询次数及负债收入比呈现出正相关关系。**
+
+**2. 贷款利率似乎与借款人的月收入水平关系不明确。**
+
+**3. 拥有房屋的借款人相比未拥有房屋的借款人更能够以较低利率筹得资金。**
+
+**4. Prosper平台在2009年7月1日后似乎增加了信用评级对贷款利率的影响权重，并且不再对消费信用评分低于600分的借款人提供服务。**
+
+
+## 多变量分析
+
+### 贷款日期和贷款利率和贷款状态之间的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Multivariate_Plots1}
+ggplot(aes(x = year(ListingCreationDate), y = BorrowerRate, color = LoanStatus), data = loandata) +
+  geom_point(alpha = 0.05) +
+  scale_x_continuous(limits = c(2005,2014),breaks=seq(2005,2014,1))+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size = 5)))
+```
+
+
+描述:2009年之前的违约数远大于2009年之后,且利息越高违约率就越大
+
+### 贷款利率与消费信用评分及贷款状态的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Multivariate_Plots2}
+ggplot(aes(x = CreditScore, y = BorrowerRate, color = LoanStatus),
+       data = loandata) +
+    geom_point(alpha = 0.05, position = "jitter") +
+    coord_cartesian(xlim = c(400, 900), ylim = c(0, 0.4)) +
+    facet_wrap(~Phase, ncol = 1) +
+    guides(color = guide_legend(override.aes = list(alpha = 1, size = 5)))+
+  geom_vline(xintercept=600,color="black")
+    
+```
+
+
+描述:在2009年之前的债务违约明显很多,并且是以信用评分较低的且贷款利率较高客户为主,2009年之后平台不再为信用评分低于600的客户提供贷款,贷款的质量有了明显提升也可以看出信用评分越高的客户,贷款的利率越低
+
+### 贷款利率与贷款总额及信用评级的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Multivariate_Plots3}
+# 2009年7月1日之前
+ggplot(aes(x = LoanOriginalAmount, y = BorrowerRate, color = CreditGrade),
+       data = subset(loandata, LoanOriginationDate < "2009-07-01" & CreditGrade != "NC")) +
+    geom_point(alpha = 0.5, position = "jitter") +
+    scale_color_brewer(type = "seq", 
+                       guide = guide_legend(title = "CreditGrade", reverse = F,
+                                            override.aes = list(alpha = 1, size = 5))) +
+    facet_wrap(~LoanStatus, ncol = 1)
+
+# 2009年7月1日之后
+ggplot(aes(x = LoanOriginalAmount, y = BorrowerRate, color = ProsperRating..Alpha.), 
+       data = subset(loandata, LoanOriginationDate > "2009-07-01" &
+                         !is.na(ProsperRating..Alpha.))) +
+    geom_point(alpha = 0.5) +
+    scale_color_brewer(type = "seq", 
+                       guide = guide_legend(title = "ProsPerRating", reverse = F,
+                                            override.aes = list(alpha = 1, size = 5))) +
+    facet_wrap(~LoanStatus, ncol = 1)
+    
+```
+
+描述:在2009年7月1日之后,Prosper将最大的贷款金额有25000提升到了35000,并且只针对信用评级为B以上的客户,随着贷款的金额越高利率在逐渐降低,此外平台的违约贷款都是由HR和E等级的客户导致的，并且这类贷款人的贷款金额一般不超过20000。
+
+### 贷款利率与贷款总额与信用卡使用频率的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Multivariate_Plots4}
+# 2009年7月1日之前
+ggplot(aes(x = LoanOriginalAmount, y = BorrowerRate, color = BankCardUse),
+       data = subset(loandata, LoanOriginationDate < "2009-07-01" & 
+                         !is.na(BankCardUse))) +
+    geom_point(alpha = 0.5) +
+    scale_color_brewer(type = "qual",
+                       guide = guide_legend(title = "BankCardUse", reverse = T,
+                                            override.aes = list(alpha = 1, size = 5))) +
+    facet_wrap(~LoanStatus, ncol = 1)
+
+# 2009年7月1日之后
+ggplot(aes(x = LoanOriginalAmount, y = BorrowerRate, color = BankCardUse),
+       data = subset(loandata, LoanOriginationDate > "2009-07-01" &
+                         !is.na(BankCardUse))) +
+    geom_point(alpha = 0.5) +
+    scale_color_brewer(type = "div",
+                       guide = guide_legend(title = "BankCardUse", reverse = T,
+                                            override.aes = list(alpha = 1, size = 5))) +
+    facet_wrap(~LoanStatus, ncol = 1)
+    
+```
+
+描述:从信用卡的使用情况来看，时间节点前后并无明显变化。但是，违约贷款中，信用卡使用情况为MildUse的借款人占比极低；相对的，信用卡使用情况为Super Use的客户占比却极高，借款利率也相对更高。这也印证了前文的判断，信用卡的超额透支会对借款人的还款能力产生较大的负面影响。
+
+## 结论
+
+**本部分通过分时间节点、分贷款状态更为深入的探索了多重变量之间的关系，发现如下特点：**
+
+**- 2009年以前贷款违约数量明显高于2009年以后的数量，且利率越高，违约率越高！**
+
+**- 消费信用评分越高的借款人，其贷款利率也相对越低。**
+
+**- 2009年以前，Prosper限制了最大借款金额为25000美元，而在2009年以后放宽限制至35000美元，且似乎只针对信用评级B级以上的客户开放申请。并且随着贷款金额的增加，贷款利率在逐渐降低。**
+
+**- 信用评级为“HR”和“E”的借款人在违约组中的比例明显较高。**
+
+**- 信用卡使用情况为Super Use的借款人在违约组中的比例明显较高，使用情况为Mild Use的借款人在违约组中的占比极低。**
+
+
+## 建立拟合回归模型,验证相关性
+两个模型分别控制了信用评分和信用等级两个因素，对比2009年前后各因素对贷款利率的影响
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, modelling}
+# loan_data
+# 2009年7月1日之前
+m1 <- lm(I(BorrowerRate)~I(CreditScore),
+         data=subset(loandata,
+                     loandata$LoanOriginationDate <= "2009-07-01"
+                      & !is.na(loandata$CreditScore) 
+                      & !is.na(CreditGrade) 
+                      & !is.na(LoanOriginalAmount) 
+                      & !is.na(BankCardUse)))
+m2 <- update(m1,~ . + CreditGrade)
+m3 <- update(m2,~ . + LoanOriginalAmount)
+m4 <- update(m3,~ . + BankCardUse)
+mtable(m1,m2,m3,m4)
+# 2009年7月1日之后
+m5 <- lm(I(BorrowerRate)~I(CreditScore),
+         data=subset(loandata,
+                     loandata$LoanOriginationDate > "2009-07-01"
+                      & !is.na(CreditScore) 
+                      & !is.na(ProsperRating..Alpha.) 
+                      & !is.na(LoanOriginalAmount) 
+                      & !is.na(BankCardUse)))
+m6 <- update(m5,~ . + ProsperRating..Alpha.)
+m7 <- update(m6,~ . + LoanOriginalAmount)
+m8 <- update(m7,~ . + BankCardUse)
+mtable(m5,m6,m7,m8)
+    
+```
+
+**描述:从表上看出2者的P值都是0说明拟合的较好,在2009年7月1日之前的R^2是0.515,2009年7月1日之后的R^2是0.914右,说明平台降低了对信用评分的权重,加强信用等级的权重。**
+
+
